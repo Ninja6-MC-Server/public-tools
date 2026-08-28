@@ -1,4 +1,4 @@
-﻿# Ninja6 Minecraft Server Network Diagnostic Tool
+# Ninja6 Minecraft Server Network Diagnostic Tool
 # Run via PowerShell:
 # irm https://raw.githubusercontent.com/Ninja6-MC-Server/public-tools/main/diagnose.ps1 | iex
 
@@ -14,57 +14,103 @@ $issues = @()
 $recommendations = @()
 
 # -------------------------------------------------------------
-# STEP 1: Check Internet & IPv6 Health
+# STEP 1: Check Internet & IPv4 Connectivity (Ping + HTTPS fallback)
 # -------------------------------------------------------------
-Write-Host "[1/5] Testing General Internet & IPv4 Connectivity..." -ForegroundColor Cyan
+Write-Host "[1/6] Testing General Internet & IPv4 Connectivity..." -ForegroundColor Cyan
+$ipv4Ok = $false
+
+# Try ICMP Ping
 $ipv4Ping = Test-Connection -ComputerName 8.8.8.8 -Count 2 -Quiet -ErrorAction SilentlyContinue
 if ($ipv4Ping) {
+    $ipv4Ok = $true
+} else {
+    # Fallback to HTTPS probe in case firewall blocks ICMP
+    try {
+        $httpTest = Test-NetConnection -ComputerName "1.1.1.1" -Port 443 -WarningAction SilentlyContinue
+        if ($httpTest.TcpTestSucceeded) { $ipv4Ok = $true }
+    } catch {}
+}
+
+if ($ipv4Ok) {
     Write-Host "  [OK] IPv4 Internet is working." -ForegroundColor Green
 } else {
-    Write-Host "  [FAIL] Cannot reach IPv4 Internet (8.8.8.8)!" -ForegroundColor Red
+    Write-Host "  [FAIL] Cannot reach IPv4 Internet!" -ForegroundColor Red
     $issues += "No IPv4 Internet connectivity"
 }
 
+# -------------------------------------------------------------
+# STEP 2: Test IPv6 Configuration & Routing Health
+# -------------------------------------------------------------
 Write-Host ""
-Write-Host "[2/5] Testing IPv6 Stability (Common ISP Bug Check)..." -ForegroundColor Cyan
-$hasIpv6 = $false
+Write-Host "[2/6] Testing IPv6 Configuration & Routing..." -ForegroundColor Cyan
+
+# Check if active physical adapters have a public global IPv6 address (2000::/3)
+$hasGlobalIpv6 = $false
 try {
-    $activeAdapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' }
+    $activeAdapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -notmatch "VPN|Tailscale|Radmin|Virtual|Loopback|TAP|ZeroTier" }
     foreach ($adapter in $activeAdapters) {
-        $v6Binding = Get-NetAdapterBinding -Name $adapter.Name -ComponentId ms_tcpip6 -ErrorAction SilentlyContinue
-        if ($v6Binding -and $v6Binding.Enabled) {
-            $hasIpv6 = $true
+        $v6Addrs = Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv6 -ErrorAction SilentlyContinue | 
+            Where-Object { $_.IPAddress -notlike "fe80*" -and $_.IPAddress -notlike "fd*" -and $_.IPAddress -notlike "::1" }
+        if ($v6Addrs) {
+            $hasGlobalIpv6 = $true
             break
         }
     }
 } catch {}
 
-if ($hasIpv6) {
+if ($hasGlobalIpv6) {
     $v6Ping = Test-Connection -ComputerName 2001:4860:4860::8888 -Count 2 -Quiet -ErrorAction SilentlyContinue
     if ($v6Ping) {
-        Write-Host "  [OK] IPv6 is enabled and working properly." -ForegroundColor Green
+        Write-Host "  [OK] Public IPv6 is assigned and routing properly." -ForegroundColor Green
     } else {
-        Write-Host "  [WARNING] IPv6 is enabled on your PC, but IPv6 traffic has 100% PACKET LOSS!" -ForegroundColor Red
-        Write-Host "            (This causes Minecraft login 'Creaking' error and connection socket exceptions)." -ForegroundColor Yellow
-        $issues += "Broken IPv6 routing detected (100% packet loss on IPv6)"
-        $recommendations += "Disable IPv6 on your network adapter or router to use fast, stable IPv4."
+        Write-Host "  [WARNING] Router assigned a public IPv6 address, but IPv6 traffic has 100% PACKET LOSS!" -ForegroundColor Red
+        Write-Host "            (This causes Minecraft login 'Creaking' error and socket disconnects)." -ForegroundColor Yellow
+        $issues += "Broken IPv6 routing detected (Router assigned public IPv6, but ISP is dropping packets)"
+        $recommendations += "Disable IPv6 in your router settings or on your Windows network adapter."
     }
 } else {
-    Write-Host "  [OK] IPv6 is disabled; using pure IPv4 (Optimal)." -ForegroundColor Green
+    Write-Host "  [OK] Network is running in pure IPv4 mode (Clean & Optimal)." -ForegroundColor Green
 }
 
 # -------------------------------------------------------------
-# STEP 2: Test Microsoft / Xbox Authentication
+# STEP 3: Test Windows Defender Firewall Rules
 # -------------------------------------------------------------
 Write-Host ""
-Write-Host "[3/5] Testing Microsoft / Xbox Live Authentication Gateway..." -ForegroundColor Cyan
+Write-Host "[3/6] Checking Windows Firewall Restrictions..." -ForegroundColor Cyan
+$firewallBlocked = $false
+try {
+    # Check for explicit outbound block rules affecting Java or Minecraft
+    $blockRules = Get-NetFirewallRule -Direction Outbound -Action Block -Enabled True -ErrorAction SilentlyContinue
+    if ($blockRules) {
+        foreach ($rule in $blockRules) {
+            $appFilter = Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue
+            $portFilter = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue
+            
+            if ($appFilter.Program -match "java|minecraft" -or $portFilter.RemotePort -match "64766|14121|25565|19132") {
+                Write-Host "  [WARNING] Windows Firewall rule '$($rule.DisplayName)' is BLOCKING Minecraft traffic!" -ForegroundColor Red
+                $firewallBlocked = $true
+                $issues += "Windows Firewall rule '$($rule.DisplayName)' is blocking Minecraft"
+            }
+        }
+    }
+} catch {}
+
+if (-not $firewallBlocked) {
+    Write-Host "  [OK] No active Windows Firewall rules are blocking Minecraft." -ForegroundColor Green
+}
+
+# -------------------------------------------------------------
+# STEP 4: Test Microsoft / Xbox Authentication Gateway
+# -------------------------------------------------------------
+Write-Host ""
+Write-Host "[4/6] Testing Microsoft & Xbox Live Auth Gateway..." -ForegroundColor Cyan
 try {
     $tcpAuth = Test-NetConnection -ComputerName "sisu.xboxlive.com" -Port 443 -WarningAction SilentlyContinue
     if ($tcpAuth.TcpTestSucceeded) {
         Write-Host "  [OK] Microsoft & Xbox Live Auth servers are reachable." -ForegroundColor Green
     } else {
-        Write-Host "  [FAIL] Cannot connect to Xbox Live Auth (sisu.xboxlive.com)!" -ForegroundColor Red
-        $issues += "Cannot connect to Xbox Live Auth gateway"
+        Write-Host "  [FAIL] Cannot connect to Xbox Live Auth (sisu.xboxlive.com:443)!" -ForegroundColor Red
+        $issues += "Cannot reach Xbox Live Auth gateway (sisu.xboxlive.com)"
     }
 } catch {
     Write-Host "  [FAIL] Failed to reach Xbox Live Auth: $_" -ForegroundColor Red
@@ -72,10 +118,10 @@ try {
 }
 
 # -------------------------------------------------------------
-# STEP 3: Test Minecraft Java Server (TCP)
+# STEP 5: Test Minecraft Java Server (TCP Port 64766)
 # -------------------------------------------------------------
 Write-Host ""
-Write-Host "[4/5] Testing Minecraft Java Server (TCP Port 64766)..." -ForegroundColor Cyan
+Write-Host "[5/6] Testing Minecraft Java Server (TCP Port 64766)..." -ForegroundColor Cyan
 $javaDomain = "tissues-convertible.tun.ply.gg"
 $javaIP = "147.185.221.22"
 $javaPort = 64766
@@ -94,14 +140,14 @@ if ($javaTcp.TcpTestSucceeded) {
     Write-Host "  [OK] Java Server TCP Port ($javaPort) is OPEN and REACHABLE!" -ForegroundColor Green
 } else {
     Write-Host "  [FAIL] Cannot connect to Java Server TCP Port $javaPort ($javaIP)!" -ForegroundColor Red
-    $issues += "Java Server port 64766 blocked by local firewall or ISP"
+    $issues += "Java Server port 64766 unreachable (Blocked by ISP/Firewall)"
 }
 
 # -------------------------------------------------------------
-# STEP 4: Test Minecraft Bedrock Server (UDP)
+# STEP 6: Test Minecraft Bedrock Server (UDP Port 14121)
 # -------------------------------------------------------------
 Write-Host ""
-Write-Host "[5/5] Testing Minecraft Bedrock Server (UDP Port 14121)..." -ForegroundColor Cyan
+Write-Host "[6/6] Testing Minecraft Bedrock Server (UDP Port 14121)..." -ForegroundColor Cyan
 $bedrockDomain = "tissues-sweep.tun.ply.gg"
 $bedrockIP = "147.185.221.31"
 $bedrockPort = 14121
@@ -142,7 +188,7 @@ Write-Host "                      DIAGNOSTIC SUMMARY                        " -F
 Write-Host "================================================================" -ForegroundColor Cyan
 
 if ($issues.Count -eq 0) {
-    Write-Host "STATUS: ALL NETWORK CHECKS PASSED!" -ForegroundColor Green
+    Write-Host "STATUS: ALL NETWORK & FIREWALL CHECKS PASSED!" -ForegroundColor Green
     Write-Host ""
     Write-Host "How to connect to the Ninja6 Server:" -ForegroundColor White
     Write-Host ""
@@ -162,14 +208,19 @@ if ($issues.Count -eq 0) {
     Write-Host ""
     Write-Host "RECOMMENDED FIXES:" -ForegroundColor Yellow
     
-    if ($issues -contains "Broken IPv6 routing detected (100% packet loss on IPv6)") {
+    if ($issues -match "IPv6") {
         Write-Host "  1. Fix Broken IPv6 on Windows (Run PowerShell as Admin):" -ForegroundColor Cyan
         Write-Host "     Disable-NetAdapterBinding -Name * -ComponentId ms_tcpip6" -ForegroundColor White
-        Write-Host "     (Or open Network Connections -> Properties -> Uncheck IPv6)" -ForegroundColor Gray
+        Write-Host "     (Or in Router settings -> disable IPv6)" -ForegroundColor Gray
+    }
+    
+    if ($issues -match "Firewall") {
+        Write-Host "  2. Fix Windows Firewall:" -ForegroundColor Cyan
+        Write-Host "     Allow javaw.exe and Minecraft through Windows Defender Firewall." -ForegroundColor White
     }
     
     Write-Host ""
-    Write-Host "  2. Correct Server Addresses:" -ForegroundColor Cyan
+    Write-Host "  3. Correct Server Addresses:" -ForegroundColor Cyan
     Write-Host "     - For Java:    tissues-convertible.tun.ply.gg (or 147.185.221.22:64766)" -ForegroundColor White
     Write-Host "     - For Bedrock: tissues-sweep.tun.ply.gg  | Port: 14121" -ForegroundColor White
 }
