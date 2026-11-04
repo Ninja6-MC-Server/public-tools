@@ -141,7 +141,7 @@ function Test-JavaStatus {
     return $status
 }
 
-function Resolve-WithSystem {
+function Resolve-SystemDnsName {
     # Looks up a name the same way games do (hosts file, then your DNS server).
     # Returns the IPv4 addresses, or an empty list.
     param([string]$Name)
@@ -153,7 +153,7 @@ function Resolve-WithSystem {
     }
 }
 
-function Resolve-WithPublicDns {
+function Resolve-PublicDnsName {
     # Looks up a name with public DNS servers, skipping your own DNS server.
     param([string]$Name)
     foreach ($server in $publicDns) {
@@ -366,8 +366,8 @@ $dnsBlocked = $false
 $javaPublicIps = @()
 $dnsCodes = @()
 foreach ($name in @($javaDomain, $bedrockAddress)) {
-    $systemIps = @(Resolve-WithSystem $name)
-    $publicIps = @(Resolve-WithPublicDns $name)
+    $systemIps = @(Resolve-SystemDnsName $name)
+    $publicIps = @(Resolve-PublicDnsName $name)
     if ($name -eq $javaDomain) { $javaPublicIps = $publicIps }
 
     if ($systemIps.Count -gt 0) {
