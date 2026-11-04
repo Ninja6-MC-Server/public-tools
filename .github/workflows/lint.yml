@@ -15,7 +15,7 @@ jobs:
         shell: pwsh
         run: |
           Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
-          $results = Invoke-ScriptAnalyzer -Path .\diagnose.ps1 -Severity Error,Warning
+          $results = Invoke-ScriptAnalyzer -Path .\diagnose.ps1 -Settings .\PSScriptAnalyzerSettings.psd1 -Severity Error,Warning
           if ($results) {
             $results | Format-Table
             exit 1
