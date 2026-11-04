@@ -53,6 +53,22 @@ curl -sSL https://raw.githubusercontent.com/Ninja6-MC-Server/public-tools/main/d
 * **Java:** a real Minecraft server list ping to `tissues-convertible.tun.ply.gg`,
   sent the same way the game does. If this passes, the server is online and your
   network can reach it.
+* **DNS:** whether your device can find both server names. If your own DNS server
+  cannot find them but public DNS can, your internet provider, router or a filter
+  is blocking the name, and the tool tells you how to switch to a public DNS server.
+  In that case it also tests the Java server through the public address, so you
+  know whether fixing DNS is all you need.
+* **Java:** a real Minecraft server list ping to `tissues-convertible.tun.ply.gg`,
+  sent the same way the game does. If this passes, the server is online and your
+  network can reach it.
 * **Bedrock:** a TCP connection to `la64zuc5.free.tryportwarp.cc` port `11899`.
   Game traffic (UDP) is set up separately when you join, so this check shows the
   join address is up but cannot prove the whole join path.
+* **Saved servers:** reads your saved server lists (official launcher, Prism,
+  Modrinth, CurseForge, ATLauncher and GDLauncher on Windows; the official launcher
+  and Prism on Linux and macOS; Windows Bedrock) and points out any entry that still
+  uses an old address, such as the numeric IP. It never edits them.
+
+### Asking for help
+At the end the tool prints a **result line** that starts with `N6DIAG`. On Windows it
+is also copied to your clipboard. Paste that one line in Discord when you ask for help.
